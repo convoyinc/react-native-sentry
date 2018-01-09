@@ -122,7 +122,7 @@ RCT_EXPORT_METHOD(crashedLastLaunch:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     NSNumber *crashedLastLaunch = @NO;
 
-    if ([client crashedLastLaunch]) {
+    if ([self.client crashedLastLaunch]) {
         crashedLastLaunch = @YES;
     }
     resolve(crashedLastLaunch);
