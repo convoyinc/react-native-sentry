@@ -116,6 +116,16 @@ RCT_EXPORT_MODULE()
     return @{@"nativeClientAvailable": @YES};
 }
 
+RCT_EXPORT_METHOD(crashedLastLaunch:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    NSNumber *crashedLastLaunch = @NO;
+
+    if ([_client crashedLastLaunch]) {
+        crashedLastLaunch = @YES;
+    }
+    resolve(crashedLastLaunch);
+}
+
 RCT_EXPORT_METHOD(startWithDsnString:(NSString * _Nonnull)dsnString options:(NSDictionary *_Nonnull)options)
 {
     static dispatch_once_t onceStartToken;
