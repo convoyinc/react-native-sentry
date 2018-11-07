@@ -91,11 +91,19 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
         }
 
         try {
-            sentryClient = Sentry.init(dsnString, new AndroidSentryClientFactory(this.getReactApplicationContext()));
+            sentryClient = Sentry.getStoredClient();
         } catch (Exception e) {
-            logger.info(String.format("Catching on startWithDsnString, calling callback" + e.getMessage()));
-            promise.reject("SentryError", "Error during init", e);
-            return;
+            logger.info(String.format("Catching on getStoredClient with message " + e.getMessage() + ", will try to init a new client"));
+        }
+
+        if (sentryClient == null) {
+            try {
+                sentryClient = Sentry.init(dsnString, new AndroidSentryClientFactory(this.getReactApplicationContext()));
+            } catch (Exception e) {
+                logger.info(String.format("Catching on startWithDsnString, calling callback" + e.getMessage()));
+                promise.reject("SentryError", "Error during init", e);
+                return;
+            }
         }
 
         androidHelper = new AndroidEventBuilderHelper(this.getReactApplicationContext());
