@@ -272,7 +272,7 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
             if (stacktrace != null) {
                 frames = (ReadableNativeArray)stacktrace.getArray("frames");
             } else {
-                frames = new ReadableNativeArray();
+                frames = new WritableNativeArray();
             }
             if (exception.hasKey("value")) {
                 addExceptionInterface(eventBuilder, exception.getString("type"), exception.getString("value"), frames);
