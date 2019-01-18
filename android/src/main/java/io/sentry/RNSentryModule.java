@@ -116,11 +116,13 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
             @Override
             public void onSuccess(Event event) {
                 WritableMap params = Arguments.createMap();
+                String level = event.getLevel().toString().toLowerCase();
                 params.putString("event_id", event.getId().toString());
-                params.putString("level", event.getLevel().toString().toLowerCase());
+                params.putString("level", level);
                 params.putString("message", event.getMessage());
                 params.putString("release", event.getRelease());
                 params.putString("dist", event.getDist());
+                params.putString("logger", event.getLogger());
                 params.putMap("extra", MapUtil.toWritableMap(event.getExtra()));
                 params.putMap("tags", MapUtil.toWritableMap(Collections.<String, Object>unmodifiableMap(event.getTags())));
                 if (event.getSentryInterfaces().containsKey(ExceptionInterface.EXCEPTION_INTERFACE)) {
@@ -129,6 +131,14 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
                 }
                 RNSentryEventEmitter.sendEvent(reactContext, RNSentryEventEmitter.SENTRY_EVENT_STORED, new WritableNativeMap());
                 RNSentryEventEmitter.sendEvent(reactContext, RNSentryEventEmitter.SENTRY_EVENT_SENT_SUCCESSFULLY, params);
+                // If this is a native crash, sleep this crashing thread for 5 seconds to give the
+                // JavaScript event handlers a chance to run before the process is terminated
+                if (level.equals("fatal") && !event.getLogger().equals("javascript")) {
+                    try {
+                        Thread.sleep(5000);
+                    } catch (Exception e) {
+                    }
+                }
             }
         });
         sentryClient.addShouldSendEventCallback(new ShouldSendEventCallback() {
@@ -258,7 +268,12 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
             ReadableNativeArray exceptionValues = (ReadableNativeArray)event.getMap("exception").getArray("values");
             ReadableNativeMap exception = exceptionValues.getMap(0);
             ReadableNativeMap stacktrace = exception.getMap("stacktrace");
-            ReadableNativeArray frames = (ReadableNativeArray)stacktrace.getArray("frames");
+            ReadableNativeArray frames;
+            if (stacktrace != null) {
+                frames = (ReadableNativeArray)stacktrace.getArray("frames");
+            } else {
+                frames = new ReadableNativeArray();
+            }
             if (exception.hasKey("value")) {
                 addExceptionInterface(eventBuilder, exception.getString("type"), exception.getString("value"), frames);
             } else {
