@@ -268,7 +268,7 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
         if (event.hasKey("exception")) {
             ReadableNativeArray exceptionValues = (ReadableNativeArray)event.getMap("exception").getArray("values");
             ReadableNativeMap exception = exceptionValues.getMap(0);
-            ReadableNativeMap stacktrace = exception.getMap("stacktrace");
+            ReadableNativeMap stacktrace = exception.hasKey("stacktrace") ? exception.getMap("stacktrace") : null;
             ReadableNativeArray frames;
             if (stacktrace != null) {
                 frames = (ReadableNativeArray)stacktrace.getArray("frames");
