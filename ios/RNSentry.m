@@ -304,4 +304,8 @@ RCT_EXPORT_METHOD(crash)
     [SentryClient.sharedClient crash];
 }
 
+RCT_EXPORT_METHOD(retrieveAndDeletePreviousSentryJSCrashes:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+    resolve(@[]);
+}
+
 @end

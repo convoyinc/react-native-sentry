@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.support.annotation.NonNull;
+import android.util.Log;
 
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
@@ -14,10 +15,13 @@ import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.ReadableNativeArray;
 import com.facebook.react.bridge.ReadableNativeMap;
 import com.facebook.react.bridge.ReadableType;
+import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeArray;
 import com.facebook.react.bridge.WritableNativeMap;
 
+import java.io.File;
+import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.Deque;
@@ -25,6 +29,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.logging.Level;
@@ -34,6 +39,8 @@ import java.util.regex.Pattern;
 
 import io.sentry.android.AndroidSentryClientFactory;
 import io.sentry.android.event.helper.AndroidEventBuilderHelper;
+import io.sentry.buffer.Buffer;
+import io.sentry.buffer.DiskBuffer;
 import io.sentry.connection.EventSendCallback;
 import io.sentry.event.Breadcrumb;
 import io.sentry.event.BreadcrumbBuilder;
@@ -48,6 +55,8 @@ import io.sentry.event.interfaces.SentryException;
 import io.sentry.event.interfaces.SentryStackTraceElement;
 import io.sentry.event.interfaces.StackTraceInterface;
 import io.sentry.event.interfaces.UserInterface;
+
+import static io.sentry.DefaultSentryClientFactory.BUFFER_SIZE_DEFAULT;
 
 public class RNSentryModule extends ReactContextBaseJavaModule {
 
@@ -64,9 +73,17 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
     private static ReadableMap tags;
     private static SentryClient sentryClient;
 
+    /**
+     * Buffer directory name.
+     */
+    private static final String DEFAULT_BUFFER_DIR = "rnsentry-buffered-sent-js-events";
+    private final Buffer buffer;
+    private Event lastEventToSend;
+
     public RNSentryModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
+        this.buffer = this.createBuffer();
         RNSentryModule.extra = new WritableNativeMap();
         RNSentryModule.packageInfo = getPackageInfo(reactContext);
     }
@@ -81,6 +98,72 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
         final Map<String, Object> constants = new HashMap<>();
         constants.put("nativeClientAvailable", true);
         return constants;
+    }
+
+    private static class RNSentryEventSendCallback implements EventSendCallback {
+
+        private final WeakReference<RNSentryModule> rnSentryModuleRef;
+        private RNSentryEventSendCallback(RNSentryModule rnSentryModule) {
+            this.rnSentryModuleRef = new WeakReference<>(rnSentryModule);
+        }
+
+        public void onFailure(Event event, Exception exception) {
+            RNSentryModule rnSentryModule = rnSentryModuleRef.get();
+
+            if (rnSentryModule == null) {
+                return;
+            }
+
+            // This needs to be there, otherwise in case of no internet the users app will not
+            // crash since we do not propagate the error further. The system needs to be
+            // overhauled to remove this "hack".
+            RNSentryEventEmitter.sendEvent(rnSentryModule.reactContext, RNSentryEventEmitter.SENTRY_EVENT_STORED, new WritableNativeMap());
+            RNSentryEventEmitter.sendEvent(rnSentryModule.reactContext, RNSentryEventEmitter.SENTRY_EVENT_SENT_SUCCESSFULLY, new WritableNativeMap());
+        }
+
+        public void onSuccess(Event event) {
+            RNSentryModule rnSentryModule = rnSentryModuleRef.get();
+
+            if (rnSentryModule == null) {
+                return;
+            }
+
+            WritableMap params = writableMapFromEvent(event);
+            if (event.getLevel() == Event.Level.FATAL && "javascript".equals(event.getLogger())) {
+                // Buffer this JS event for next boot since we have a JS fatal exception.
+                // The app will crash with the RNSentryEventEmitter.sendEvent below...
+                rnSentryModule.bufferFatalJavascriptError(event);
+            }
+            RNSentryEventEmitter.sendEvent(rnSentryModule.reactContext, RNSentryEventEmitter.SENTRY_EVENT_STORED, new WritableNativeMap());
+            RNSentryEventEmitter.sendEvent(rnSentryModule.reactContext, RNSentryEventEmitter.SENTRY_EVENT_SENT_SUCCESSFULLY, params);
+            // If this is a native crash that we just allowed to send, sleep this crashing thread for 5 seconds to give the
+            // JavaScript event handlers a chance to run before the process is terminated
+            if (event.equals(rnSentryModule.lastEventToSend) &&
+                event.getLevel() == Event.Level.FATAL &&
+                !"javascript".equals(event.getLogger())) {
+                try {
+                    Thread.sleep(5000);
+                } catch (Exception e) {
+                }
+            }
+        }
+    }
+
+    static private WritableMap writableMapFromEvent(Event event) {
+        WritableMap params = Arguments.createMap();
+        params.putString("event_id", event.getId().toString());
+        params.putString("level", event.getLevel().toString().toLowerCase());
+        params.putString("message", event.getMessage());
+        params.putString("release", event.getRelease());
+        params.putString("dist", event.getDist());
+        params.putString("logger", event.getLogger());
+        params.putMap("extra", MapUtil.toWritableMap(event.getExtra()));
+        params.putMap("tags", MapUtil.toWritableMap(Collections.<String, Object>unmodifiableMap(event.getTags())));
+        if (event.getSentryInterfaces().containsKey(ExceptionInterface.EXCEPTION_INTERFACE)) {
+            ExceptionInterface exceptionInterface = ((ExceptionInterface)event.getSentryInterfaces().get(ExceptionInterface.EXCEPTION_INTERFACE));
+            params.putString("message", exceptionInterface.getExceptions().getFirst().getExceptionMessage());
+        }
+        return params;
     }
 
     @ReactMethod
@@ -104,44 +187,8 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
         }
 
         androidHelper = new AndroidEventBuilderHelper(this.getReactApplicationContext());
-        sentryClient.addEventSendCallback(new EventSendCallback() {
-            @Override
-            public void onFailure(Event event, Exception exception) {
-                // This needs to be there, otherwise in case of no internet the users app will not
-                // crash since we do not propagate the error further. The system needs to be
-                // overhauled to remove this "hack".
-                RNSentryEventEmitter.sendEvent(reactContext, RNSentryEventEmitter.SENTRY_EVENT_STORED, new WritableNativeMap());
-                RNSentryEventEmitter.sendEvent(reactContext, RNSentryEventEmitter.SENTRY_EVENT_SENT_SUCCESSFULLY, new WritableNativeMap());
-            }
 
-            @Override
-            public void onSuccess(Event event) {
-                WritableMap params = Arguments.createMap();
-                String level = event.getLevel().toString().toLowerCase();
-                params.putString("event_id", event.getId().toString());
-                params.putString("level", level);
-                params.putString("message", event.getMessage());
-                params.putString("release", event.getRelease());
-                params.putString("dist", event.getDist());
-                params.putString("logger", event.getLogger());
-                params.putMap("extra", MapUtil.toWritableMap(event.getExtra()));
-                params.putMap("tags", MapUtil.toWritableMap(Collections.<String, Object>unmodifiableMap(event.getTags())));
-                if (event.getSentryInterfaces().containsKey(ExceptionInterface.EXCEPTION_INTERFACE)) {
-                    ExceptionInterface exceptionInterface = ((ExceptionInterface)event.getSentryInterfaces().get(ExceptionInterface.EXCEPTION_INTERFACE));
-                    params.putString("message", exceptionInterface.getExceptions().getFirst().getExceptionMessage());
-                }
-                RNSentryEventEmitter.sendEvent(reactContext, RNSentryEventEmitter.SENTRY_EVENT_STORED, new WritableNativeMap());
-                RNSentryEventEmitter.sendEvent(reactContext, RNSentryEventEmitter.SENTRY_EVENT_SENT_SUCCESSFULLY, params);
-                // If this is a native crash, sleep this crashing thread for 5 seconds to give the
-                // JavaScript event handlers a chance to run before the process is terminated
-                if (level.equals("fatal") && !event.getLogger().equals("javascript")) {
-                    try {
-                        Thread.sleep(5000);
-                    } catch (Exception e) {
-                    }
-                }
-            }
-        });
+        sentryClient.addEventSendCallback(new RNSentryEventSendCallback(this));
         sentryClient.addShouldSendEventCallback(new ShouldSendEventCallback() {
             @Override
             public boolean shouldSend(Event event) {
@@ -153,17 +200,51 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
                         return false;
                     }
                 }
+                boolean shouldSend = true;
                 // Since we set shouldSendEvent for react-native we need to duplicate the code for sampling here
                 // I know you could add multiple shouldSendCallbacks but I want to be consistent with ios
                 if (options.hasKey("sampleRate")) {
                     double randomDouble = new Random().nextDouble();
-                    return options.getDouble("sampleRate") >= Math.abs(randomDouble);
+                    shouldSend = options.getDouble("sampleRate") >= Math.abs(randomDouble);
                 }
-                return true;
+                if (shouldSend) {
+                    lastEventToSend = event;
+                }
+                return shouldSend;
             }
         });
         logger.info(String.format("startWithDsnString '%s'", dsnString));
         promise.resolve(true);
+    }
+
+    /**
+     * Create the {@link Buffer} where events are stored when JS crashes.
+     *
+     * @return the {@link Buffer} where events are stored when JS crashes.
+     */
+    private Buffer createBuffer() {
+        File bufferDir = new File(this.reactContext.getCacheDir().getAbsolutePath(), DEFAULT_BUFFER_DIR);
+
+        logger.info("Using buffer dir: " + bufferDir.getAbsolutePath());
+        return new DiskBuffer(bufferDir, BUFFER_SIZE_DEFAULT);
+    }
+
+    private void bufferFatalJavascriptError(Event event) {
+        this.buffer.add(event);
+    }
+
+    @ReactMethod
+    public void retrieveAndDeletePreviousSentryJSCrashes(final Promise promise) {
+
+        WritableArray events = new WritableNativeArray();
+        Iterator<Event> sentryEvents = buffer.getEvents();
+        while (sentryEvents.hasNext()) {
+            Event event = sentryEvents.next();
+            events.pushMap(writableMapFromEvent(event));
+            buffer.discard(event);
+        }
+
+        promise.resolve(events);
     }
 
     @ReactMethod
