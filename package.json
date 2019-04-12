@@ -1,5 +1,5 @@
 {
-  "name": "react-native-sentry",
+  "name": "@convoy/react-native-sentry",
   "homepage": "https://github.com/getsentry/react-native-sentry",
   "repository": "https://github.com/getsentry/react-native-sentry",
   "version": "0.39.1",
