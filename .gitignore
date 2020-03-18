@@ -8,9 +8,9 @@ node_modules
 # Xcode
 
 ## Build generated
-build/
-DerivedData
-dist
+#build/
+#DerivedData
+#dist
 coverage
 
 ## Various settings
