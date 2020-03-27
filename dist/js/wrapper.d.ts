@@ -7,7 +7,7 @@ export declare const NATIVE: {
      * Sending the event over the bridge to native
      * @param event Event
      */
-    sendEvent(event: Event): PromiseLike<Response>;
+    sendEvent(event: Event): Promise<Response>;
     platform: import("react-native").PlatformOSType;
 };
 //# sourceMappingURL=wrapper.d.ts.map

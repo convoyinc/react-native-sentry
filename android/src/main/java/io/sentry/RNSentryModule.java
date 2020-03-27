@@ -8,6 +8,8 @@ import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
+import com.facebook.react.bridge.ReactContext;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.WritableMap;
@@ -18,11 +20,17 @@ import java.io.FileOutputStream;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.Charset;
 import java.util.HashMap;
-import java.util.Iterator;
+import java.lang.reflect.Field;
+import java.lang.Number;
+import android.util.Log;
 import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
 
 import io.sentry.android.core.AnrIntegration;
 import io.sentry.android.core.NdkIntegration;
@@ -42,7 +50,9 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
 
     private static PackageInfo packageInfo;
     private SentryOptions sentryOptions;
-
+    private static final String ON_NATIVE_BEFORE_SEND_SENTRY_EVENT = "OnNativeBeforeSendSentryEvent";
+    private static final String CRASH_KEY = "CRASH_KEY";
+    private static final String CAUSE_KEY = "CAUSE_KEY";
     public RNSentryModule(ReactApplicationContext reactContext) {
         super(reactContext);
         RNSentryModule.packageInfo = getPackageInfo(reactContext);
@@ -61,25 +71,59 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
         return constants;
     }
 
+    public void setBeforeSendDelegate() {
+
+    }
+
+    private static final Set<Class<?>> WRAPPER_TYPES = getWrapperTypes();
+    public static boolean isWrapperType(Class<?> clazz)
+    {
+        return WRAPPER_TYPES.contains(clazz);
+    }
+    private static Set<Class<?>> getWrapperTypes()
+    {
+        Set<Class<?>> ret = new HashSet<>();
+        ret.add(Boolean.class);
+        ret.add(Character.class);
+        ret.add(Byte.class);
+        ret.add(Short.class);
+        ret.add(Integer.class);
+        ret.add(Long.class);
+        ret.add(Float.class);
+        ret.add(Double.class);
+        ret.add(Void.class);
+        return ret;
+    }
+
     @ReactMethod
     public void startWithDsnString(String dsnString, final ReadableMap rnOptions, Promise promise) {
         SentryAndroid.init(this.getReactApplicationContext(), options -> {
             options.setDsn(dsnString);
 
-            if (rnOptions.hasKey("debug") && rnOptions.getBoolean("debug")) {
-                options.setDebug(true);
-            }
-            if (rnOptions.hasKey("environment") && rnOptions.getString("environment") != null) {
-                options.setEnvironment(rnOptions.getString("environment"));
-            }
-            if (rnOptions.hasKey("release") && rnOptions.getString("release") != null) {
-                options.setRelease(rnOptions.getString("release"));
-            }
-            if (rnOptions.hasKey("dist") && rnOptions.getString("dist") != null) {
-                options.setDist(rnOptions.getString("dist"));
-            }
+            logger.info(String.format("NATENATE: initialized rn sentry module"));
 
+           if (rnOptions.hasKey("debug") && rnOptions.getBoolean("debug")) {
+               options.setDebug(true);
+           }
+           if (rnOptions.hasKey("environment") && rnOptions.getString("environment") != null) {
+               options.setEnvironment(rnOptions.getString("environment"));
+           }
+           if (rnOptions.hasKey("release") && rnOptions.getString("release") != null) {
+               options.setRelease(rnOptions.getString("release"));
+           }
+           if (rnOptions.hasKey("dist") && rnOptions.getString("dist") != null) {
+               options.setDist(rnOptions.getString("dist"));
+           }
             options.setBeforeSend((event, hint) -> {
+                Log.e("NATENATE"," SENTRY SDK NATIVE INSTANCE: ");
+                Log.e("NATENATE"," eventId: "+event.getEventId());
+                Log.e("NATENATE"," timestamp: "+event.getTimestamp());
+//                Log.e("NATENATE"," throwable: "+event.getThrowable());
+                Log.e("NATENATE"," message: "+event.getMessage());
+                Log.e("NATENATE"," release: "+event.getRelease());
+                Log.e("NATENATE"," level: "+event.getLevel());
+//                Log.e("NATENATE"," extras: "+event.getExtras());
+                Log.e("NateNate"," debugMeta: "+event.getDebugMeta());
                 // React native internally throws a JavascriptException
                 // Since we catch it before that, we don't want to send this one
                 // because we would send it twice
@@ -88,12 +132,32 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
                     if (null != ex && ex.getType().contains("JavascriptException")) {
                         return null;
                     }
+
                 } catch (Exception e) {
                     // We do nothing
                 }
+                //ClasWithStuff myStuff = new ClassWithStuff();
+                /**
+                 * push this up to JS land so we can process it with our metrics counting code
+                 */
+                logger.info(String.format("NATENATE: got event in library on before send"));
+
+                ReactContext rnac = RNSentryModule.this.getReactApplicationContext();
+                if (rnac != null) {
+                    DeviceEventManagerModule.RCTDeviceEventEmitter emitter = rnac.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class);
+                    if (emitter != null) {
+                        String message = event.getMessage() != null ? event.getMessage().getFormatted(): "no message on crash";
+                        Log.e("NATENATE",String.format("Sentry Native Library pushing event into JS land"));
+                        Log.e("NATENATE",String.format(message));
+
+                        HashMap map = new HashMap();
+                        map.put(CRASH_KEY, event.getEventId().toString());
+                        map.put(CAUSE_KEY, message);
+                        emitter.emit(ON_NATIVE_BEFORE_SEND_SENTRY_EVENT, Arguments.makeNativeMap(map));
+                    }
+                }
                 return event;
             });
-
 
             for (Iterator<Integration> iterator = options.getIntegrations().iterator(); iterator.hasNext(); ) {
             Integration integration = iterator.next();
@@ -177,4 +241,5 @@ public class RNSentryModule extends ReactContextBaseJavaModule {
                 return Level.OFF;
         }
     }
+
 }

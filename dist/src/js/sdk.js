@@ -1,4 +1,4 @@
-import { defaultIntegrations, getCurrentHub, Integrations } from "@sentry/browser";
+import { defaultIntegrations, getCurrentHub } from "@sentry/browser";
 import { initAndBind, setExtra } from "@sentry/core";
 import { RewriteFrames } from "@sentry/integrations";
 import { getGlobalObject } from "@sentry/utils";
@@ -7,7 +7,6 @@ import { DebugSymbolicator, DeviceContext, ReactNativeErrorHandlers, Release } f
 // const { RNSentry } = NativeModules;
 const IGNORED_DEFAULT_INTEGRATIONS = [
     "GlobalHandlers",
-    "Breadcrumbs",
     "TryCatch" // We don't need this
 ];
 /**
@@ -22,8 +21,7 @@ export function init(options = {
         options.defaultIntegrations = [
             new ReactNativeErrorHandlers(),
             new Release(),
-            ...defaultIntegrations.filter(i => !IGNORED_DEFAULT_INTEGRATIONS.includes(i.name)),
-            new Integrations.Breadcrumbs()
+            ...defaultIntegrations.filter(i => !IGNORED_DEFAULT_INTEGRATIONS.includes(i.name))
         ];
         if (__DEV__) {
             options.defaultIntegrations.push(new DebugSymbolicator());
